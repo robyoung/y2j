@@ -1,6 +1,6 @@
 [package]
 name = "y2j"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Rob Young <rob@robyoung.digital>"]
 edition = "2018"
 
