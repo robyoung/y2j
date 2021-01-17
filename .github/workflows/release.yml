@@ -1,0 +1,89 @@
+# A lot of this is lifted from https://github.com/BurntSushi/ripgrep/blob/master/.github/workflows/release.yml
+name: Release
+
+on:
+  push:
+    tags:
+      - '[0-9]+.[0-9]+.[0-9]+'
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+        - build: linux
+          os: ubuntu-latest
+          target: x86_64-unknown-linux-musl
+
+        - build: linux-arm
+          os: ubuntu-latest
+          target: arm-unknown-linux-gnueabihf
+
+        - build: macos
+          os: macos-latest
+          target: x86_64-apple-darwin
+
+        - build: win-msvc
+          os: windows-2019
+          target: x86_64-pc-windows-msvc
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install packages (Ubuntu)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends musl-tools
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: nightly
+          profile: minimal
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Install Cross
+        run: |
+          cargo install cross
+
+      - name: Build release binary
+        run: |
+          cross build --verbose --release --target ${{ matrix.target }}
+
+      - name: Strip release binary (linux and macos)
+        if: matrix.build == 'linux' || matrix.build == 'macos'
+        run: strip "target/${{ matrix.target }}/release/y2j"
+
+      - name: Strip release binary (arm)
+        if: matrix.build == 'linux-arm'
+        run: |
+          docker run --rm \
+            -v "$PWD/target:/target:Z" \
+            rustembedded/cross:arm-unknown-linux-gnueabihf \
+            arm-linux-gnueabihf-strip \
+            /target/arm-unknown-linux-gnueabihf/release/rg
+
+      - name: Release vars
+        id: vars
+        run: |
+          version=${GITHUB_REF#refs/tags/}
+          echo ::set-output name=VERSION::${version}
+          echo ::set-output name=FILE_NAME::y2j-${version}-${{ matrix.target }}
+
+      - name: Rename release binary
+        run: |
+          cp "target/${{ matrix.target }}/release/y2j" ${{ steps.vars.FILE_NAME }}
+
+      - uses: actions/upload-artifact@v2
+        with:
+          path: ${{ steps.vars.FILE_NAME }}
+
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/download-artifact@v2
+      - run: ls -l
