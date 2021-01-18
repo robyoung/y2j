@@ -7,7 +7,36 @@ on:
       - '[0-9]+.[0-9]+.[0-9]+'
 
 jobs:
+  release:
+    name: Create Release
+    runs-on: ubuntu-latest
+
+    outputs:
+      version: ${{ steps.vars.outputs.version }}
+      upload_url: ${{ steps.release.outputs.upload_url }}
+
+    steps:
+      - name: Release vars
+        id: vars
+        run: |
+          version=${GITHUB_REF#refs/tags/}
+          echo ::set-output name=version::${version}
+
+      - name: Create GitHub release
+        id: release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ steps.vars.outputs.version }}
+          release_name: ${{ steps.vars.outputs.version }}
+
   build:
+    name: Build Binary
+    runs-on: ${{ matrix.os }}
+
+    needs: [release]
+
     strategy:
       matrix:
         include:
@@ -17,7 +46,7 @@ jobs:
 
         - build: linux-arm
           os: ubuntu-latest
-          target: arm-unknown-linux-gnueabihf
+          target: arm-unknown-linux-musleabihf
 
         - build: macos
           os: macos-latest
@@ -26,8 +55,6 @@ jobs:
         - build: win-msvc
           os: windows-2019
           target: x86_64-pc-windows-msvc
-
-    runs-on: ${{ matrix.os }}
 
     steps:
       - uses: actions/checkout@v2
@@ -51,7 +78,8 @@ jobs:
 
       - name: Build release binary
         run: |
-          cross build --verbose --release --target ${{ matrix.target }}
+          cross build --release --target ${{ matrix.target }}
+          ls -R
 
       - name: Strip release binary (linux and macos)
         if: matrix.build == 'linux' || matrix.build == 'macos'
@@ -61,29 +89,30 @@ jobs:
         if: matrix.build == 'linux-arm'
         run: |
           docker run --rm \
-            -v "$PWD/target:/target:Z" \
-            rustembedded/cross:arm-unknown-linux-gnueabihf \
-            arm-linux-gnueabihf-strip \
-            /target/arm-unknown-linux-gnueabihf/release/rg
+            -v "${PWD}/target:/target:Z" \
+            rustembedded/cross:arm-unknown-linux-musleabihf \
+            arm-linux-musleabihf-strip \
+            /target/arm-unknown-linux-musleabihf/release/y2j
 
       - name: Release vars
         id: vars
+        shell: bash
         run: |
-          version=${GITHUB_REF#refs/tags/}
-          echo ::set-output name=VERSION::${version}
-          echo ::set-output name=FILE_NAME::y2j-${version}-${{ matrix.target }}
+          version=${{needs.release.outputs.version}}
+          if [[ "${{ matrix.os }}" == "windows-2019" ]]; then
+            suffix='.exe'
+          else
+            suffix=''
+          fi
+          echo ::set-output name=RELEASE_BINARY::target/${{ matrix.target }}/release/y2j${suffix}
+          echo ::set-output name=ARTIFACT_NAME::y2j-${version}-${{ matrix.target }}${suffix}
 
-      - name: Rename release binary
-        run: |
-          cp "target/${{ matrix.target }}/release/y2j" ${{ steps.vars.FILE_NAME }}
-
-      - uses: actions/upload-artifact@v2
+      - name: Upload release binary
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          path: ${{ steps.vars.FILE_NAME }}
-
-  release:
-    runs-on: ubuntu-latest
-
-    steps:
-      - uses: actions/download-artifact@v2
-      - run: ls -l
+          upload_url: ${{ needs.release.outputs.upload_url }}
+          asset_path: ${{ steps.vars.outputs.RELEASE_BINARY }}
+          asset_name: ${{ steps.vars.outputs.ARTIFACT_NAME }}
+          asset_content_type: application/octet-stream
